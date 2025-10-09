@@ -1,180 +1,224 @@
+// lib/services/navigation_service.dart
+
 import '../models/location.dart';
 import '../models/graph.dart';
-import 'dart:math';
+import '../models/route_result.dart'; // YENİ: RouteResult modelini ekledik
+import 'dart:math' as math;
+import 'dart:async'; // Asenkron işlemler için
+import 'package:collection/collection.dart'; // firstWhereOrNull için
 
+/// Uygulamanın navigasyon hesaplamalarından ve rota hesaplamasından sorumlu servistir.
 class NavigationService {
-  // Tüm lokasyonları (Location ID'sine göre) hafızada tutmak için Map
-  // NavigationService bir kere başlatıldığında veriyi hazırlar.
-  late final Map<String, Location> _locationMap;
-  late final Graph _graph; // Graph'ı da bir kere oluşturup tutuyoruz.
+  late Graph graph;
+  late List<Location> _allLocations;
+
+  // YENİ EKLENDİ: Yürüyüş hızı sabiti (metre/saniye)
+  static const double AVERAGE_WALKING_SPEED_MPS = 1.4;
 
   NavigationService() {
-    // 1. Lokasyonları yükle
-    _locationMap = {for (var loc in _initialLocations) loc.id: loc};
-    // 2. Graph'ı oluştur
-    _graph = _createTestGraph();
+    _initializeLocations();
+    _createGraph();
   }
 
-  // YÜKLEME LİSTESİ: Koordinatları ve Ara Düğümleri (Koridor/Merdiven) içerir.
-  List<Location> get _initialLocations => [
-    // BİNALAR (Koordinatlar X: Kampüs bazlı, Y: Kampüs bazlı)
-    Location(id: 'muhendislik', name: 'Mühendislik Fakültesi', type: 'building', description: 'Mühendislik Fakültesi', floor: 0, isBuilding: true, x: 100.0, y: 50.0),
-    Location(id: 'fen_edebiyat', name: 'Fen Edebiyat Fakültesi', type: 'building', description: 'Fen Edebiyat Fakültesi', floor: 0, isBuilding: true, x: 250.0, y: 120.0),
-    Location(id: 'kutuphane', name: 'Kütüphane', type: 'library', description: 'Merkez Kütüphane', floor: 0, isBuilding: true, x: 350.0, y: 100.0),
-    Location(id: 'kantin', name: 'Kantin', type: 'cafeteria', description: 'Ana Kantin', floor: 0, isBuilding: true, x: 10.0, y: 10.0),
-    Location(id: 'kafeterya', name: 'Kafeterya', type: 'cafeteria', description: 'Öğrenci Kafeteryası', floor: 0, isBuilding: true, x: 20.0, y: 5.0),
+  /// Kampüsteki tüm önemli konumları ve düğümleri (node) tanımlar.
+  void _initializeLocations() {
+    _allLocations = [
+      Location(id: 'A101', name: 'Yazılım Lab 1', floor: 1, isBuilding: true, type: 'Classroom', description: 'Bilgisayar laboratuvarı.', x: 400.0, y: 300.0, parentId: 'BINA_A'),
+      Location(id: 'A102', name: 'Proje Odası', floor: 1, isBuilding: true, type: 'Room', description: 'Küçük grup odası.', x: 400.0, y: 450.0, parentId: 'BINA_A'),
+      Location(id: 'B201', name: 'Öğretim Üyesi Ofisi', floor: 2, isBuilding: true, type: 'Office', description: 'Prof. Ofisi.', x: 450.0, y: 350.0, parentId: 'BINA_B'),
+      Location(id: 'B202', name: 'Sınıf B-202', floor: 2, isBuilding: true, type: 'Classroom', description: 'Genel amaçlı derslik.', x: 550.0, y: 450.0, parentId: 'BINA_B'),
+      Location(id: 'YEMEKHANE', name: 'Merkez Yemekhane', floor: 1, isBuilding: true, type: 'Facility', description: 'Merkez yemekhane.', x: 350.0, y: 50.0, parentId: 'BINA_Y'),
+      Location(id: 'GIRIS', name: 'Ana Giriş', floor: 1, isBuilding: true, type: 'Entrance', description: 'Bina ana girişi.', x: 100.0, y: 50.0, parentId: 'BINA_A'),
+      Location(id: 'BINA_A', name: 'A Blok', floor: 1, isBuilding: true, type: 'building', description: 'A Blok.', x: 0.0, y: 0.0),
+      Location(id: 'BINA_B', name: 'B Blok', floor: 2, isBuilding: true, type: 'building', description: 'B Blok.', x: 0.0, y: 0.0),
+      Location(id: 'BINA_Y', name: 'Yemekhane Bloğu', floor: 1, isBuilding: true, type: 'building', description: 'Merkez Yemekhane.', x: 0.0, y: 0.0),
+      Location(id: 'N1', name: 'Koridor A Ortası', floor: 1, isBuilding: false, type: 'NavNode', description: 'Koridor geçiş noktası.', x: 200.0, y: 200.0),
+      Location(id: 'N2', name: 'Koridor A Sonu', floor: 1, isBuilding: false, type: 'NavNode', description: 'Koridor A sonu.', x: 500.0, y: 200.0),
+      Location(id: 'N3', name: 'Koridor B Ortası', floor: 2, isBuilding: false, type: 'NavNode', description: 'Koridor B ortası.', x: 500.0, y: 250.0),
+      Location(id: 'S1', name: 'Merdiven A (1. Kat)', floor: 1, isBuilding: false, type: 'Stairs', description: 'Merdiven A başlangıç.', x: 50.0, y: 200.0),
+      Location(id: 'S1_UST', name: 'Merdiven A (2. Kat)', floor: 2, isBuilding: false, type: 'Stairs', description: 'Merdiven A çıkış.', x: 50.0, y: 200.0),
+    ];
+  }
 
-    // MÜHENDİSLİK İÇİ ARA DÜĞÜMLER (Lokal Koordinatlar: X: koridor boyunca, Y: koridorun eni)
-    Location(id: 'merdiven_2kat', name: '2. Kat Merdiven', parentId: 'muhendislik', type: 'stairs', description: 'Mühendislik Merdiven Başlangıcı', floor: 1, x: 2.0, y: 5.0),
-    Location(id: 'koridor_giris', name: 'Koridor Giriş', parentId: 'muhendislik', type: 'corridor', description: '2. Kat Koridor Girişi', floor: 2, x: 5.0, y: 10.0),
-    Location(id: 'koridor_orta', name: 'Koridor Orta', parentId: 'muhendislik', type: 'corridor', description: '2. Kat Koridor Ortası', floor: 2, x: 15.0, y: 10.0),
-    Location(id: 'koridor_sonu', name: 'Koridor Sonu', parentId: 'muhendislik', type: 'corridor', description: '2. Kat Koridor Sonu', floor: 2, x: 23.0, y: 10.0),
+  List<Location> getAllLocations() => _allLocations;
 
-    // MÜHENDİSLİK SINIFLARI ve LAB'lar (Koordinatlar)
-    Location(id: 'd201', name: 'D201 Sınıfı', parentId: 'muhendislik', type: 'classroom', description: 'D201 Sınıfı', floor: 2, x: 6.0, y: 12.0),
-    Location(id: 'd202', name: 'D202 Sınıfı', parentId: 'muhendislik', type: 'classroom', description: 'D202 Sınıfı', floor: 2, x: 7.0, y: 8.0),
-    Location(id: 'd203', name: 'D203 Sınıfı', parentId: 'muhendislik', type: 'classroom', description: 'D203 Sınıfı', floor: 2, x: 16.0, y: 12.0),
-    Location(id: 'lab_bilisim', name: 'Bilişim Laboratuvarı', parentId: 'muhendislik', type: 'lab', description: 'Bilişim Lab', floor: 2, x: 12.0, y: 12.0),
-    Location(id: 'lab_elektrik', name: 'Elektrik Laboratuvarı', parentId: 'muhendislik', type: 'lab', description: 'Elektrik Lab', floor: 2, x: 18.0, y: 12.0),
-
-    // FEN EDEBİYAT SINIFLARI (Mock olarak)
-    Location(id: 'fen_merdiven', name: 'Fen Edebiyat Merdiven', parentId: 'fen_edebiyat', type: 'stairs', description: 'Fen Merdiven', floor: 1, x: 2.0, y: 8.0),
-    Location(id: 'fen_koridor', name: 'Fen Koridor', parentId: 'fen_edebiyat', type: 'corridor', description: 'Fen Koridor', floor: 1, x: 10.0, y: 8.0),
-    Location(id: 'a101', name: 'A101 Sınıfı', parentId: 'fen_edebiyat', type: 'classroom', description: 'A101 Sınıfı', floor: 1, x: 10.0, y: 1.0),
-    Location(id: 'a102', name: 'A102 Sınıfı', parentId: 'fen_edebiyat', type: 'classroom', description: 'A102 Sınıfı', floor: 1, x: 10.0, y: 2.0),
-
-    // KÜTÜPHANE ALANLARI (Mock olarak)
-    Location(id: 'kutuphane_giris', name: 'Kütüphane Giriş', parentId: 'kutuphane', type: 'corridor', description: 'Kütüphane Giriş', floor: 0, x: 10.0, y: 1.0),
-    Location(id: 'kutuphane_okuma', name: 'Okuma Salonu', parentId: 'kutuphane', type: 'library', description: 'Okuma Salonu', floor: 1, x: 15.0, y: 1.0),
-    Location(id: 'kutuphane_bilgisayar', name: 'Bilgisayar Laboratuvarı', parentId: 'kutuphane', type: 'library', description: 'Bilgisayar Lab', floor: 2, x: 15.0, y: 2.0),
-
-  ];
-
-  // Sadece ID'ye göre bir Location objesi döndüren metot
   Location getLocationById(String id) {
-    if (!_locationMap.containsKey(id)) {
-      throw Exception('Lokasyon ID bulunamadı: $id');
+    return _allLocations.firstWhere(
+          (loc) => loc.id == id,
+      orElse: () => throw Exception('Location ID "$id" bulunamadı.'),
+    );
+  }
+
+  double getPhysicalDistanceBetween(String fromId, String toId) {
+    final from = getLocationById(fromId);
+    final to = getLocationById(toId);
+
+    double dx = to.x - from.x;
+    double dy = to.y - from.y;
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  double _calculateDistance(String fromId, String toId) {
+    final from = getLocationById(fromId);
+    final to = getLocationById(toId);
+
+    double dx = to.x - from.x;
+    double dy = to.y - from.y;
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  void _createGraph() {
+    graph = Graph();
+
+    for (var loc in _allLocations) {
+      graph.addNode(loc.id);
     }
-    return _locationMap[id]!;
+
+    _addBidirectionalEdge('GIRIS', 'N1');
+    _addBidirectionalEdge('N1', 'A101');
+    _addBidirectionalEdge('N1', 'A102');
+    _addBidirectionalEdge('A102', 'YEMEKHANE');
+    _addBidirectionalEdge('N1', 'S1');
+    _addBidirectionalEdge('N1', 'N2');
+
+    _addBidirectionalEdge('S1', 'S1_UST', costMultiplier: 2.0);
+
+    _addBidirectionalEdge('S1_UST', 'N3');
+    _addBidirectionalEdge('N3', 'B201');
+    _addBidirectionalEdge('N3', 'B202');
   }
 
-  // Tüm lokasyonları getir
-  List<Location> getAllLocations() {
-    return _locationMap.values.toList();
+  void _addBidirectionalEdge(String id1, String id2, {double costMultiplier = 1.0}) {
+    final physicalDistance = _calculateDistance(id1, id2);
+    final costDistance = physicalDistance * costMultiplier;
+
+    graph.addEdge(id1, id2, costDistance, physicalDistance: physicalDistance);
+    graph.addEdge(id2, id1, costDistance, physicalDistance: physicalDistance);
   }
 
-  // Seçili binadaki sınıfları getir
-  List<Location> getClassrooms(String buildingId) {
-    return _locationMap.values.where((loc) => loc.parentId == buildingId && loc.type == 'classroom').toList();
-  }
+  Future<RouteResult> findShortestPath(String startId, String endId) async {
+    await Future.delayed(const Duration(milliseconds: 50));
 
-  // TEST GRAPH'INI OLUŞTUR
-  Graph _createTestGraph() {
-    Graph graph = Graph();
+    final start = getLocationById(startId);
+    final end = getLocationById(endId);
 
-    // MÜHENDİSLİK FAKÜLTESİ (2. KAT ODAKLANMASI)
+    final distances = <String, double>{};
+    final previousNodes = <String, String?>{};
+    final unvisited = <String>{};
 
-    // Merdiven Bağlantıları (Katlar arası geçişler, genellikle binalar arası mesafeden daha kısadır)
-    // NOT: Merdivenler genelde 1. kat ile 2. kat arasını bağlar
-    graph.addEdge('merdiven_2kat', 'koridor_giris', 5.0);
-
-    // Koridor Bağlantıları
-    graph.addEdge('koridor_giris', 'koridor_orta', 10.0); // 10 metre
-    graph.addEdge('koridor_orta', 'koridor_sonu', 8.0); // 8 metre
-
-    // Koridor -> Sınıf/Lab Bağlantıları (Kapıdan koridora mesafe)
-    graph.addEdge('koridor_giris', 'd201', 3.0);
-    graph.addEdge('koridor_giris', 'd202', 5.0);
-    graph.addEdge('koridor_orta', 'lab_bilisim', 4.0);
-    graph.addEdge('koridor_sonu', 'lab_elektrik', 3.0);
-
-    // MÜHENDİSLİK - FEN EDEBİYAT ARASI (Binalar arası geçiş)
-    // Bu mesafeler mock, harita izni alınınca güncellenecek.
-    graph.addEdge('muhendislik', 'fen_edebiyat', 50.0);
-    graph.addEdge('muhendislik', 'kutuphane', 70.0);
-    graph.addEdge('fen_edebiyat', 'kutuphane', 30.0);
-
-    // BİNADAN KORİDORA BAĞLANTI (Çok önemli, bu binanın girişidir!)
-    // Mühendislik binası girisinden merdivene olan mesafe
-    graph.addEdge('muhendislik', 'merdiven_2kat', 15.0);
-    // Fen Edebiyat binası girisinden fen merdivenine olan mesafe
-    graph.addEdge('fen_edebiyat', 'fen_merdiven', 12.0);
-
-    // FEN EDEBİYAT KORİDOR BAĞLANTILARI
-    graph.addEdge('fen_merdiven', 'fen_koridor', 5.0);
-    graph.addEdge('fen_koridor', 'a101', 3.0);
-    graph.addEdge('fen_koridor', 'a102', 4.0);
-
-    // KÜTÜPHANE İÇİ
-    graph.addEdge('kutuphane_giris', 'kutuphane_okuma', 8.0);
-    graph.addEdge('kutuphane_giris', 'kutuphane_bilgisayar', 15.0);
-    graph.addEdge('kutuphane', 'kutuphane_giris', 5.0); // Bina girisi -> iç alan
-
-    return graph;
-  }
-
-  // Dijkstra ile rota hesapla
-  List<String> calculateRouteWithDijkstra(String startId, String endId) {
-    try {
-      // _graph objesi Constructor'da bir kere oluşturuldu
-      List<String> route = _graph.shortestPath(startId, endId);
-      return route;
-    } catch (e) {
-      print('Dijkstra hatası: $e');
-      return [];
+    for (var nodeId in graph.adjacencyList.keys) {
+      distances[nodeId] = double.infinity;
+      previousNodes[nodeId] = null;
+      unvisited.add(nodeId);
     }
-  }
 
-  // Rota bilgisini insan diline çevir
-  String convertRouteToInstructions(List<String> route) {
-    if (route.isEmpty) return '❌ Rota bulunamadı!';
+    distances[start.id] = 0;
 
-    double totalDistance = _graph.calculateTotalDistance(route);
-    List<String> instructions = [];
+    while (unvisited.isNotEmpty) {
+      String? currentNodeId;
+      double minDistance = double.infinity;
 
-    for (int i = 0; i < route.length - 1; i++) {
-      String fromId = route[i];
-      String toId = route[i + 1];
-
-      // Her ID'nin Location objesini al
-      final fromLocation = getLocationById(fromId);
-      final toLocation = getLocationById(toId);
-
-      // Mesafeyi al
-      double distance = _graph.edges[fromId]![toId]!;
-
-      String instruction = '';
-
-      // Yönlendirme mantığı (Kat ve tip kontrolü)
-      if (toLocation.type == 'stairs') {
-        instruction = '⬆️ Merdivenlere Yönel (${distance.toStringAsFixed(1)}m)';
-      } else if (toLocation.floor != fromLocation.floor) {
-        // Kat değiştirme (merdivenden sonraki adım)
-        instruction = '🪜 ${toLocation.floor}. Kata ${toLocation.floor > fromLocation.floor ? "ÇIK" : "İN"}';
-      } else if (toLocation.isBuilding) {
-        // Bina değiştirme
-        instruction = '🚌 Kampüs içinde ${toLocation.name} Binasına Yönel (${distance.toStringAsFixed(1)}m)';
-      } else {
-        // Koridor/Sınıf içi yönlendirme
-        instruction = '➡️ ${distance.toStringAsFixed(1)} metre ilerle ve ${toLocation.name} konumuna ulaş.';
+      for (var nodeId in unvisited) {
+        if (distances[nodeId]! < minDistance) {
+          minDistance = distances[nodeId]!;
+          currentNodeId = nodeId;
+        }
       }
 
-      instructions.add(instruction);
+      if (currentNodeId == null) break;
+      if (currentNodeId == end.id) break;
+
+      unvisited.remove(currentNodeId);
+
+      for (var edge in graph.adjacencyList[currentNodeId]!) {
+        final neighborId = edge.toId;
+        if (unvisited.contains(neighborId)) {
+          final newDistance = distances[currentNodeId]! + edge.cost;
+          if (newDistance < distances[neighborId]!) {
+            distances[neighborId] = newDistance;
+            previousNodes[neighborId] = currentNodeId;
+          }
+        }
+      }
     }
 
-    // Son adımı ekle: Hedefe ulaşıldı
-    instructions.add('🎯 Hedefinize ulaştınız: ${getLocationById(route.last).name}');
+    final path = <String>[];
+    String? current = end.id;
 
-    return '🗺️ **Navigasyon Rotası**\n\n'
-        '📏 Toplam Mesafe: ${totalDistance.toStringAsFixed(1)} metre\n\n'
-        '📍 **Rota Detayları:**\n' +
-        instructions.join('\n\n') +
-        '\n\n✅ **Dijkstra algoritması ile en kısa yol hesaplandı!**';
+    while (current != null) {
+      path.add(current);
+      if (current == start.id) break;
+      current = previousNodes[current];
+    }
+
+    final routeNodeIds = path.reversed.toList();
+
+    if (routeNodeIds.isEmpty || routeNodeIds.first != startId || routeNodeIds.last != endId) {
+      throw Exception('Rota bulunamadı. Lütfen farklı bir başlangıç ve hedef seçin.');
+    }
+
+    final totalDistance = _calculateTotalDistance(routeNodeIds);
+    final instructions = _convertRouteToInstructions(routeNodeIds);
+
+    return RouteResult(
+      routeNodeIds: routeNodeIds,
+      totalDistance: totalDistance,
+      instructions: instructions,
+    );
   }
 
-  // Bu metot artık kullanılmıyor, ancak tutarlılık için eklenmiş. Kaldırılabilir.
-  List<String> calculateRoute(Location start, Location end) {
-    // Gerçek Dijkstra metodu (calculateRouteWithDijkstra) artık kullanılıyor.
-    return [];
+  /// Null-safe ve güvenli total distance hesaplama
+  double _calculateTotalDistance(List<String> routeNodeIds) {
+    double totalDistance = 0.0;
+    if (routeNodeIds.length < 2) return 0.0;
+
+    for (int i = 0; i < routeNodeIds.length - 1; i++) {
+      final fromId = routeNodeIds[i];
+      final toId = routeNodeIds[i + 1];
+
+      final edge = graph.adjacencyList[fromId]?.firstWhereOrNull(
+            (e) => e.toId == toId,
+      );
+
+      if (edge != null) {
+        totalDistance += edge.physicalDistance;
+      } else {
+        throw Exception('Edge bulunamadı: $fromId -> $toId');
+      }
+    }
+
+    return double.parse(totalDistance.toStringAsFixed(1));
+  }
+
+  String _convertRouteToInstructions(List<String> routeNodeIds) {
+    final instructions = StringBuffer('');
+
+    if (routeNodeIds.isEmpty) return 'Rota bulunamadı.';
+
+    for (int i = 0; i < routeNodeIds.length; i++) {
+      final location = getLocationById(routeNodeIds[i]);
+
+      if (i == 0) {
+        instructions.writeln('🚩 BAŞLANGIÇ: ${location.name} (${location.floor}. Kat)');
+      } else if (i == routeNodeIds.length - 1) {
+        instructions.writeln('🎯 HEDEF: ${location.name} (${location.floor}. Kat)');
+      } else {
+        final nextLocation = getLocationById(routeNodeIds[i+1]);
+
+        if (location.floor != nextLocation.floor) {
+          if (nextLocation.floor > location.floor) {
+            instructions.writeln('${i+1}. 📈 ${location.name} → ${nextLocation.floor}. kata ÇIKIN');
+          } else {
+            instructions.writeln('${i+1}. 📉 ${location.name} → ${nextLocation.floor}. kata İNİN');
+          }
+        } else if (location.type == 'Stairs' || location.type == 'NavNode') {
+          instructions.writeln('${i+1}. ➡️ ${location.name} üzerinden ilerleyin');
+        } else if (location.isBuilding) {
+          instructions.writeln('${i+1}. 🏛️ ${location.name} yakınından geçin');
+        }
+      }
+    }
+
+    return instructions.toString();
   }
 }
