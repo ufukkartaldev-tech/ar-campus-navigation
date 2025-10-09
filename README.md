@@ -132,8 +132,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Ufuk Kartal**
 - GitHub: [@ufukkartaldev-tech](https://github.com/ufukkartaldev-tech)
-- LinkedIn: [Add your LinkedIn]
-- Email: [Add your email]
+
+- Email: [ufuk.kartal.dev@gmail.com]
 
 ## 🙏 Acknowledgments
 
